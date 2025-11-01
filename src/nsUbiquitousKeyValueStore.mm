@@ -2,6 +2,8 @@
 
 // Apple APIs
 #import <Foundation/Foundation.h>
+#import <Security/Security.h>
+#import <CloudKit/CloudKit.h>
 
 #include "json_formatter.h"
 
@@ -272,6 +274,391 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
               Napi::Function::New(env, GetDocumentDirectoryPath));
   exports.Set(Napi::String::New(env, "getiCloudDirectoryPath"),
               Napi::Function::New(env, GetiCloudDirectoryPath));
+  
+  // Keychain functions
+  exports.Set(Napi::String::New(env, "keychainSetItem"),
+              Napi::Function::New(env, [](const Napi::CallbackInfo &info) {
+                Napi::Env env = info.Env();
+                if (info.Length() < 1 || !info[0].IsObject()) {
+                  Napi::TypeError::New(env, "Expected params object").ThrowAsJavaScriptException();
+                  return;
+                }
+
+                Napi::Object params = info[0].As<Napi::Object>();
+                std::string key = (std::string)params.Get("key").ToString();
+                std::string value = (std::string)params.Get("value").ToString();
+
+                bool enableSync = true;
+                if (params.Has("enableSync") && params.Get("enableSync").IsBoolean()) {
+                  enableSync = params.Get("enableSync").ToBoolean();
+                }
+
+                NSString *service = [[NSBundle mainBundle] bundleIdentifier] ?: @"";
+                NSString *nsKey = ToNSString(key);
+                NSString *nsValue = ToNSString(value);
+                NSData *valueData = [nsValue dataUsingEncoding:NSUTF8StringEncoding];
+
+                // Delete existing (both local and synced)
+                NSMutableDictionary *deleteQuery = [@{
+                  (id)kSecClass: (id)kSecClassGenericPassword,
+                  (id)kSecAttrService: service,
+                  (id)kSecAttrAccount: nsKey,
+                  (id)kSecAttrSynchronizable: (id)kSecAttrSynchronizableAny
+                } mutableCopy];
+                SecItemDelete((CFDictionaryRef)deleteQuery);
+
+                // Add new item
+                NSMutableDictionary *addQuery = [@{
+                  (id)kSecClass: (id)kSecClassGenericPassword,
+                  (id)kSecAttrService: service,
+                  (id)kSecAttrAccount: nsKey,
+                  (id)kSecValueData: valueData,
+                  (id)kSecAttrAccessible: (id)kSecAttrAccessibleWhenUnlocked,
+                  (id)kSecAttrSynchronizable: enableSync ? (id)kCFBooleanTrue : (id)kCFBooleanFalse
+                } mutableCopy];
+
+                if (params.Has("label") && params.Get("label").IsString()) {
+                  std::string label = (std::string)params.Get("label").ToString();
+                  addQuery[(id)kSecAttrLabel] = ToNSString(label);
+                }
+                if (params.Has("description") && params.Get("description").IsString()) {
+                  std::string desc = (std::string)params.Get("description").ToString();
+                  addQuery[(id)kSecAttrDescription] = ToNSString(desc);
+                }
+
+                OSStatus status = SecItemAdd((CFDictionaryRef)addQuery, nil);
+                if (status != errSecSuccess) {
+                  Napi::Error::New(env, "Keychain add failed: " + std::to_string((int)status)).ThrowAsJavaScriptException();
+                }
+              }));
+
+  exports.Set(Napi::String::New(env, "keychainGetItem"),
+              Napi::Function::New(env, [](const Napi::CallbackInfo &info) -> Napi::Value {
+                Napi::Env env = info.Env();
+                if (info.Length() < 1 || !info[0].IsObject()) {
+                  return Napi::TypeError::New(env, "Expected params object").Value();
+                }
+
+                Napi::Object params = info[0].As<Napi::Object>();
+                std::string key = (std::string)params.Get("key").ToString();
+
+                NSString *service = [[NSBundle mainBundle] bundleIdentifier] ?: @"";
+                NSString *nsKey = ToNSString(key);
+
+                NSDictionary *query = @{
+                  (id)kSecClass: (id)kSecClassGenericPassword,
+                  (id)kSecAttrService: service,
+                  (id)kSecAttrAccount: nsKey,
+                  (id)kSecReturnData: (id)kCFBooleanTrue,
+                  (id)kSecMatchLimit: (id)kSecMatchLimitOne,
+                  (id)kSecAttrSynchronizable: (id)kSecAttrSynchronizableAny
+                };
+
+                CFTypeRef result = NULL;
+                OSStatus status = SecItemCopyMatching((CFDictionaryRef)query, &result);
+                if (status == errSecSuccess) {
+                  NSData *valueData = (__bridge_transfer NSData *)result;
+                  NSString *value = [[NSString alloc] initWithData:valueData encoding:NSUTF8StringEncoding];
+                  if (!value) {
+                    return env.Null();
+                  }
+                  Napi::Object out = Napi::Object::New(env);
+                  out.Set("key", key);
+                  out.Set("value", std::string([value UTF8String]));
+                  return out;
+                } else if (status == errSecItemNotFound) {
+                  return env.Null();
+                } else {
+                  Napi::Error::New(env, "Keychain get failed: " + std::to_string((int)status)).ThrowAsJavaScriptException();
+                  return env.Null();
+                }
+              }));
+
+  exports.Set(Napi::String::New(env, "keychainRemoveItem"),
+              Napi::Function::New(env, [](const Napi::CallbackInfo &info) {
+                Napi::Env env = info.Env();
+                if (info.Length() < 1 || !info[0].IsObject()) {
+                  Napi::TypeError::New(env, "Expected params object").ThrowAsJavaScriptException();
+                  return;
+                }
+
+                Napi::Object params = info[0].As<Napi::Object>();
+                std::string key = (std::string)params.Get("key").ToString();
+
+                NSString *service = [[NSBundle mainBundle] bundleIdentifier] ?: @"";
+                NSString *nsKey = ToNSString(key);
+
+                NSDictionary *query = @{
+                  (id)kSecClass: (id)kSecClassGenericPassword,
+                  (id)kSecAttrService: service,
+                  (id)kSecAttrAccount: nsKey,
+                  (id)kSecAttrSynchronizable: (id)kSecAttrSynchronizableAny
+                };
+
+                OSStatus status = SecItemDelete((CFDictionaryRef)query);
+                if (!(status == errSecSuccess || status == errSecItemNotFound)) {
+                  Napi::Error::New(env, "Keychain remove failed: " + std::to_string((int)status)).ThrowAsJavaScriptException();
+                }
+              }));
+
+  exports.Set(Napi::String::New(env, "keychainHasItem"),
+              Napi::Function::New(env, [](const Napi::CallbackInfo &info) -> Napi::Value {
+                Napi::Env env = info.Env();
+                if (info.Length() < 1 || !info[0].IsObject()) {
+                  return Napi::TypeError::New(env, "Expected params object").Value();
+                }
+
+                Napi::Object params = info[0].As<Napi::Object>();
+                std::string key = (std::string)params.Get("key").ToString();
+
+                NSString *service = [[NSBundle mainBundle] bundleIdentifier] ?: @"";
+                NSString *nsKey = ToNSString(key);
+
+                NSDictionary *query = @{
+                  (id)kSecClass: (id)kSecClassGenericPassword,
+                  (id)kSecAttrService: service,
+                  (id)kSecAttrAccount: nsKey,
+                  (id)kSecAttrSynchronizable: (id)kSecAttrSynchronizableAny
+                };
+
+                OSStatus status = SecItemCopyMatching((CFDictionaryRef)query, NULL);
+                return Napi::Boolean::New(env, status == errSecSuccess);
+              }));
+
+  exports.Set(Napi::String::New(env, "keychainIsICloudSyncEnabled"),
+              Napi::Function::New(env, [](const Napi::CallbackInfo &info) -> Napi::Value {
+                Napi::Env env = info.Env();
+                NSString *service = [[NSBundle mainBundle] bundleIdentifier] ?: @"";
+                NSString *testKey = @"__onekey_icloud_sync_test__";
+                NSData *valueData = [@"test" dataUsingEncoding:NSUTF8StringEncoding];
+
+                NSDictionary *deleteQuery = @{
+                  (id)kSecClass: (id)kSecClassGenericPassword,
+                  (id)kSecAttrService: service,
+                  (id)kSecAttrAccount: testKey,
+                  (id)kSecAttrSynchronizable: (id)kSecAttrSynchronizableAny
+                };
+                SecItemDelete((CFDictionaryRef)deleteQuery);
+
+                NSDictionary *addQuery = @{
+                  (id)kSecClass: (id)kSecClassGenericPassword,
+                  (id)kSecAttrService: service,
+                  (id)kSecAttrAccount: testKey,
+                  (id)kSecValueData: valueData,
+                  (id)kSecAttrAccessible: (id)kSecAttrAccessibleWhenUnlocked,
+                  (id)kSecAttrSynchronizable: (id)kCFBooleanTrue
+                };
+
+                OSStatus status = SecItemAdd((CFDictionaryRef)addQuery, nil);
+                SecItemDelete((CFDictionaryRef)deleteQuery);
+
+                return Napi::Boolean::New(env, status == errSecSuccess);
+              }));
+
+  // CloudKit functions
+  exports.Set(Napi::String::New(env, "cloudkitIsAvailable"),
+              Napi::Function::New(env, [](const Napi::CallbackInfo &info) -> Napi::Value {
+                Napi::Env env = info.Env();
+                __block CKAccountStatus status = CKAccountStatusCouldNotDetermine;
+                dispatch_semaphore_t sema = dispatch_semaphore_create(0);
+                [[CKContainer defaultContainer] accountStatusWithCompletionHandler:^(CKAccountStatus s, NSError * _Nullable error) {
+                  status = s;
+                  dispatch_semaphore_signal(sema);
+                }];
+                dispatch_semaphore_wait(sema, DISPATCH_TIME_FOREVER);
+                return Napi::Boolean::New(env, status == CKAccountStatusAvailable);
+              }));
+
+  exports.Set(Napi::String::New(env, "cloudkitSaveRecord"),
+              Napi::Function::New(env, [](const Napi::CallbackInfo &info) -> Napi::Value {
+                Napi::Env env = info.Env();
+                if (info.Length() < 1 || !info[0].IsObject()) {
+                  return Napi::TypeError::New(env, "Expected params object").Value();
+                }
+                Napi::Object params = info[0].As<Napi::Object>();
+                std::string recordTypeStr = (std::string)params.Get("recordType").ToString();
+                std::string recordIDStr = (std::string)params.Get("recordID").ToString();
+                std::string dataStr = (std::string)params.Get("data").ToString();
+
+                CKContainer *container = [CKContainer defaultContainer];
+                CKDatabase *db = [container privateCloudDatabase];
+                CKRecordID *rid = [[CKRecordID alloc] initWithRecordName:ToNSString(recordIDStr)];
+                CKRecord *rec = [[CKRecord alloc] initWithRecordType:ToNSString(recordTypeStr) recordID:rid];
+                rec[@"data"] = ToNSString(dataStr);
+
+                __block CKRecord *saved = nil;
+                __block NSError *err = nil;
+                dispatch_semaphore_t sema = dispatch_semaphore_create(0);
+                [db saveRecord:rec completionHandler:^(CKRecord * _Nullable record, NSError * _Nullable error) {
+                  saved = record;
+                  err = error;
+                  dispatch_semaphore_signal(sema);
+                }];
+                dispatch_semaphore_wait(sema, DISPATCH_TIME_FOREVER);
+
+                if (err) {
+                  Napi::Error::New(env, std::string("CloudKit save failed: ") + [[err localizedDescription] UTF8String]).ThrowAsJavaScriptException();
+                  return env.Null();
+                }
+                NSTimeInterval created = saved.creationDate ? [saved.creationDate timeIntervalSince1970] * 1000.0 : 0;
+                Napi::Object out = Napi::Object::New(env);
+                out.Set("recordID", std::string([saved.recordID.recordName UTF8String]));
+                out.Set("createdAt", Napi::Number::New(env, created));
+                return out;
+              }));
+
+  exports.Set(Napi::String::New(env, "cloudkitFetchRecord"),
+              Napi::Function::New(env, [](const Napi::CallbackInfo &info) -> Napi::Value {
+                Napi::Env env = info.Env();
+                if (info.Length() < 1 || !info[0].IsObject()) {
+                  return Napi::TypeError::New(env, "Expected params object").Value();
+                }
+                Napi::Object params = info[0].As<Napi::Object>();
+                std::string recordTypeStr = (std::string)params.Get("recordType").ToString();
+                std::string recordIDStr = (std::string)params.Get("recordID").ToString();
+
+                CKContainer *container = [CKContainer defaultContainer];
+                CKDatabase *db = [container privateCloudDatabase];
+                CKRecordID *rid = [[CKRecordID alloc] initWithRecordName:ToNSString(recordIDStr)];
+
+                __block CKRecord *fetched = nil;
+                __block NSError *err = nil;
+                dispatch_semaphore_t sema = dispatch_semaphore_create(0);
+                [db fetchRecordWithID:rid completionHandler:^(CKRecord * _Nullable record, NSError * _Nullable error) {
+                  fetched = record;
+                  err = error;
+                  dispatch_semaphore_signal(sema);
+                }];
+                dispatch_semaphore_wait(sema, DISPATCH_TIME_FOREVER);
+
+                if (err) {
+                  if ([err.domain isEqualToString:CKErrorDomain] && err.code == CKErrorUnknownItem) {
+                    return env.Null();
+                  }
+                  Napi::Error::New(env, std::string("CloudKit fetch failed: ") + [[err localizedDescription] UTF8String]).ThrowAsJavaScriptException();
+                  return env.Null();
+                }
+                NSString *data = (NSString *)fetched[@"data"];
+                NSTimeInterval created = fetched.creationDate ? [fetched.creationDate timeIntervalSince1970] * 1000.0 : 0;
+                NSTimeInterval modified = fetched.modificationDate ? [fetched.modificationDate timeIntervalSince1970] * 1000.0 : 0;
+                Napi::Object out = Napi::Object::New(env);
+                out.Set("recordID", std::string([fetched.recordID.recordName UTF8String]));
+                out.Set("recordType", std::string([fetched.recordType UTF8String]));
+                out.Set("data", data ? std::string([data UTF8String]) : std::string(""));
+                out.Set("createdAt", Napi::Number::New(env, created));
+                out.Set("modifiedAt", Napi::Number::New(env, modified));
+                return out;
+              }));
+
+  exports.Set(Napi::String::New(env, "cloudkitDeleteRecord"),
+              Napi::Function::New(env, [](const Napi::CallbackInfo &info) {
+                Napi::Env env = info.Env();
+                if (info.Length() < 1 || !info[0].IsObject()) {
+                  Napi::TypeError::New(env, "Expected params object").ThrowAsJavaScriptException();
+                  return;
+                }
+                Napi::Object params = info[0].As<Napi::Object>();
+                std::string recordIDStr = (std::string)params.Get("recordID").ToString();
+
+                CKContainer *container = [CKContainer defaultContainer];
+                CKDatabase *db = [container privateCloudDatabase];
+                CKRecordID *rid = [[CKRecordID alloc] initWithRecordName:ToNSString(recordIDStr)];
+
+                __block NSError *err = nil;
+                dispatch_semaphore_t sema = dispatch_semaphore_create(0);
+                [db deleteRecordWithID:rid completionHandler:^(CKRecordID * _Nullable recordID, NSError * _Nullable error) {
+                  err = error;
+                  dispatch_semaphore_signal(sema);
+                }];
+                dispatch_semaphore_wait(sema, DISPATCH_TIME_FOREVER);
+
+                if (err) {
+                  if ([err.domain isEqualToString:CKErrorDomain] && err.code == CKErrorUnknownItem) {
+                    return; // treat as success
+                  }
+                  Napi::Error::New(env, std::string("CloudKit delete failed: ") + [[err localizedDescription] UTF8String]).ThrowAsJavaScriptException();
+                }
+              }));
+
+  exports.Set(Napi::String::New(env, "cloudkitRecordExists"),
+              Napi::Function::New(env, [](const Napi::CallbackInfo &info) -> Napi::Value {
+                Napi::Env env = info.Env();
+                if (info.Length() < 1 || !info[0].IsObject()) {
+                  return Napi::TypeError::New(env, "Expected params object").Value();
+                }
+                Napi::Object params = info[0].As<Napi::Object>();
+                std::string recordIDStr = (std::string)params.Get("recordID").ToString();
+
+                CKContainer *container = [CKContainer defaultContainer];
+                CKDatabase *db = [container privateCloudDatabase];
+                CKRecordID *rid = [[CKRecordID alloc] initWithRecordName:ToNSString(recordIDStr)];
+
+                __block CKRecord *fetched = nil;
+                __block NSError *err = nil;
+                dispatch_semaphore_t sema = dispatch_semaphore_create(0);
+                [db fetchRecordWithID:rid completionHandler:^(CKRecord * _Nullable record, NSError * _Nullable error) {
+                  fetched = record;
+                  err = error;
+                  dispatch_semaphore_signal(sema);
+                }];
+                dispatch_semaphore_wait(sema, DISPATCH_TIME_FOREVER);
+
+                if (err) {
+                  if ([err.domain isEqualToString:CKErrorDomain] && err.code == CKErrorUnknownItem) {
+                    return Napi::Boolean::New(env, false);
+                  }
+                  Napi::Error::New(env, std::string("CloudKit exists check failed: ") + [[err localizedDescription] UTF8String]).ThrowAsJavaScriptException();
+                  return Napi::Boolean::New(env, false);
+                }
+                return Napi::Boolean::New(env, fetched != nil);
+              }));
+
+  exports.Set(Napi::String::New(env, "cloudkitQueryRecords"),
+              Napi::Function::New(env, [](const Napi::CallbackInfo &info) -> Napi::Value {
+                Napi::Env env = info.Env();
+                if (info.Length() < 1 || !info[0].IsObject()) {
+                  return Napi::TypeError::New(env, "Expected params object").Value();
+                }
+                Napi::Object params = info[0].As<Napi::Object>();
+                std::string recordTypeStr = (std::string)params.Get("recordType").ToString();
+
+                CKContainer *container = [CKContainer defaultContainer];
+                CKDatabase *db = [container privateCloudDatabase];
+                NSPredicate *predicate = [NSPredicate predicateWithValue:YES];
+                CKQuery *query = [[CKQuery alloc] initWithRecordType:ToNSString(recordTypeStr) predicate:predicate];
+
+                __block NSArray<CKRecord *> *results = nil;
+                __block NSError *err = nil;
+                dispatch_semaphore_t sema = dispatch_semaphore_create(0);
+                [db performQuery:query inZoneWithID:nil completionHandler:^(NSArray<CKRecord *> * _Nullable r, NSError * _Nullable error) {
+                  results = r;
+                  err = error;
+                  dispatch_semaphore_signal(sema);
+                }];
+                dispatch_semaphore_wait(sema, DISPATCH_TIME_FOREVER);
+
+                if (err) {
+                  Napi::Error::New(env, std::string("CloudKit query failed: ") + [[err localizedDescription] UTF8String]).ThrowAsJavaScriptException();
+                  return env.Null();
+                }
+                Napi::Array arr = Napi::Array::New(env, results.count);
+                NSUInteger idx = 0;
+                for (CKRecord *rec in results) {
+                  NSString *data = (NSString *)rec[@"data"];
+                  NSTimeInterval created = rec.creationDate ? [rec.creationDate timeIntervalSince1970] * 1000.0 : 0;
+                  NSTimeInterval modified = rec.modificationDate ? [rec.modificationDate timeIntervalSince1970] * 1000.0 : 0;
+                  Napi::Object obj = Napi::Object::New(env);
+                  obj.Set("recordID", std::string([rec.recordID.recordName UTF8String]));
+                  obj.Set("recordType", std::string([rec.recordType UTF8String]));
+                  obj.Set("data", data ? std::string([data UTF8String]) : std::string(""));
+                  obj.Set("createdAt", Napi::Number::New(env, created));
+                  obj.Set("modifiedAt", Napi::Number::New(env, modified));
+                  arr[idx++] = obj;
+                }
+                Napi::Object out = Napi::Object::New(env);
+                out.Set("records", arr);
+                return out;
+              }));
   return exports;
 }
 

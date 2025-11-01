@@ -56,4 +56,39 @@ module.exports = {
   removeValue,
   getDocumentDirectoryPath,
   getiCloudDirectoryPath,
+  // Keychain exports
+  keychainSetItem: function(params) {
+    return nsUbiquitousKeyValueStore.keychainSetItem.call(this, params);
+  },
+  keychainGetItem: function(params) {
+    return nsUbiquitousKeyValueStore.keychainGetItem.call(this, params);
+  },
+  keychainRemoveItem: function(params) {
+    return nsUbiquitousKeyValueStore.keychainRemoveItem.call(this, params);
+  },
+  keychainHasItem: function(params) {
+    return nsUbiquitousKeyValueStore.keychainHasItem.call(this, params);
+  },
+  keychainIsICloudSyncEnabled: function() {
+    return nsUbiquitousKeyValueStore.keychainIsICloudSyncEnabled.call(this);
+  },
+  // CloudKit exports
+  cloudkitIsAvailable: function() {
+    return nsUbiquitousKeyValueStore.cloudkitIsAvailable.call(this);
+  },
+  cloudkitSaveRecord: function(params) {
+    return nsUbiquitousKeyValueStore.cloudkitSaveRecord.call(this, params);
+  },
+  cloudkitFetchRecord: function(params) {
+    return nsUbiquitousKeyValueStore.cloudkitFetchRecord.call(this, params);
+  },
+  cloudkitDeleteRecord: function(params) {
+    return nsUbiquitousKeyValueStore.cloudkitDeleteRecord.call(this, params);
+  },
+  cloudkitRecordExists: function(params) {
+    return nsUbiquitousKeyValueStore.cloudkitRecordExists.call(this, params);
+  },
+  cloudkitQueryRecords: function(params) {
+    return nsUbiquitousKeyValueStore.cloudkitQueryRecords.call(this, params);
+  },
 };

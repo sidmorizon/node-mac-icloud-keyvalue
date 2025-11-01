@@ -33,7 +33,7 @@
       ],
       "OTHER_LDFLAGS": [
         "-Wl, -bind_at_load",
-        "-framework CoreFoundation -framework Cocoa -framework Carbon",
+        "-framework CoreFoundation -framework Cocoa -framework Carbon -framework Security -framework CloudKit",
         "-arch x86_64",
         "-arch arm64"
         ],
