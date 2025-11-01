@@ -26,15 +26,15 @@ declare module 'node-mac-icloud-keyvalue' {
     enableSync?: boolean;
     label?: string;
     description?: string;
-  }): void;
+  }): Promise<void>;
 
-  export function keychainGetItem(params: { key: string }): { key: string; value: string } | null;
+  export function keychainGetItem(params: { key: string }): Promise<{ key: string; value: string } | null>;
 
-  export function keychainRemoveItem(params: { key: string }): void;
+  export function keychainRemoveItem(params: { key: string }): Promise<void>;
 
-  export function keychainHasItem(params: { key: string }): boolean;
+  export function keychainHasItem(params: { key: string }): Promise<boolean>;
 
-  export function keychainIsICloudSyncEnabled(): boolean;
+  export function keychainIsICloudSyncEnabled(): Promise<boolean>;
 
   // CloudKit types
   export type CloudKitSaveRecordParams = { recordType: string; recordID: string; data: string };
@@ -54,10 +54,10 @@ declare module 'node-mac-icloud-keyvalue' {
   export type CloudKitQueryRecordsResult = { records: CloudKitRecordResult[] };
 
   // CloudKit APIs
-  export function cloudkitIsAvailable(): boolean;
-  export function cloudkitSaveRecord(params: CloudKitSaveRecordParams): CloudKitSaveRecordResult;
-  export function cloudkitFetchRecord(params: CloudKitFetchRecordParams): CloudKitRecordResult | null;
-  export function cloudkitDeleteRecord(params: CloudKitDeleteRecordParams): void;
-  export function cloudkitRecordExists(params: CloudKitRecordExistsParams): boolean;
-  export function cloudkitQueryRecords(params: CloudKitQueryRecordsParams): CloudKitQueryRecordsResult;
+  export function cloudkitIsAvailable(): Promise<boolean>;
+  export function cloudkitSaveRecord(params: CloudKitSaveRecordParams): Promise<CloudKitSaveRecordResult>;
+  export function cloudkitFetchRecord(params: CloudKitFetchRecordParams): Promise<CloudKitRecordResult | null>;
+  export function cloudkitDeleteRecord(params: CloudKitDeleteRecordParams): Promise<void>;
+  export function cloudkitRecordExists(params: CloudKitRecordExistsParams): Promise<boolean>;
+  export function cloudkitQueryRecords(params: CloudKitQueryRecordsParams): Promise<CloudKitQueryRecordsResult>;
 }
